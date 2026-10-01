@@ -1,0 +1,168 @@
+version: "2"
+
+formatters:
+  enable:
+    - gci
+    - gofumpt
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/paulojmdias/go-imds)
+    gofumpt:
+      extra:
+        group-params: true
+        clothe-returns: true
+        balance-calls: true
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+linters:
+  enable:
+    - copyloopvar
+    - decorder
+    - depguard
+    - errcheck
+    - errorlint
+    - exhaustive
+    - forbidigo
+    - gocritic
+    - gosec
+    - govet
+    - misspell
+    - modernize
+    - nolintlint
+    - predeclared
+    - reassign
+    - revive
+    - staticcheck
+    - testifylint
+    - thelper
+    - unconvert
+    - unparam
+    - unused
+    - usestdlibvars
+    - usetesting
+    - wastedassign
+    - whitespace
+
+  settings:
+    exhaustive:
+      default-signifies-exhaustive: true
+
+    # Rule 1 of the contract, enforced mechanically. Every one of these carries
+    # Proxy: ProxyFromEnvironment, which routes link-local metadata addresses
+    # through an outbound proxy. Nothing about the call site looks wrong, which
+    # is why a linter catches this and a code review does not.
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: ^http\.DefaultClient$
+          msg: >-
+            http.DefaultClient uses ProxyFromEnvironment. Build a client with
+            imds.NewClient, which sets Proxy: nil.
+        - pattern: ^http\.DefaultTransport$
+          msg: >-
+            http.DefaultTransport uses ProxyFromEnvironment. Build a client with
+            imds.NewClient, which sets Proxy: nil.
+        - pattern: ^http\.(Get|Head|Post|PostForm)$
+          msg: >-
+            These call http.DefaultClient, which uses ProxyFromEnvironment, and
+            take no context. Use the imds.Client methods.
+
+    depguard:
+      rules:
+        # No cloud vendor SDK, anywhere. Every one that was assessed reads
+        # response bodies with no limit, which is the guarantee this repository
+        # exists to make, and none of them can be talked out of it from the
+        # outside. See the criteria in CONTRIBUTING.md before adding one.
+        no-vendor-sdks:
+          files:
+            - "**/providers/**"
+          deny:
+            - pkg: github.com/hetznercloud/hcloud-go
+              desc: >-
+                Its metadata client assigns to the Timeout field of the
+                http.Client it is given, replacing the caller's deadline and
+                mutating an object the caller owns.
+            - pkg: cloud.google.com/go/compute/metadata
+              desc: >-
+                Reads response bodies with io.ReadAll and no limit, and its Get
+                returns only the body, so the Metadata-Flavor response header
+                cannot be checked.
+            - pkg: github.com/aws/aws-sdk-go-v2
+              desc: >-
+                Its IMDS client reads the token and every response body with no
+                limit, for what is one PUT and two GETs.
+            - pkg: github.com/scaleway/scaleway-sdk-go
+              desc: The Scaleway metadata lookup is one GET. Use the imds client directly.
+            - pkg: github.com/digitalocean/go-metadata
+              desc: The DigitalOcean metadata lookup is one GET. Use the imds client directly.
+            - pkg: github.com/linode/go-metadata
+              desc: The Akamai metadata lookup is a token exchange and one GET. Use the imds client directly.
+
+        # The YAML parser exists for one provider. Hetzner serves its metadata
+        # as a YAML document with nested network configuration, which is the
+        # only reason this repository has a non-test dependency at all. Every
+        # other provider gets JSON or plain text and has no business importing
+        # it.
+        yaml-is-for-hetzner-only:
+          files:
+            - "**/imds/**"
+            - "**/imdstest/**"
+            - "**/providers/**"
+            - "!**/providers/hetzner/**"
+          deny:
+            - pkg: go.yaml.in/yaml
+              desc: >-
+                Only providers/hetzner parses YAML, because only Hetzner serves
+                it. If another service does too, widen this rule deliberately.
+            - pkg: gopkg.in/yaml.v3
+              desc: Superseded by go.yaml.in/yaml/v3, which this repository already has.
+            - pkg: sigs.k8s.io/yaml
+              desc: Brings a second YAML implementation for no gain.
+
+        # No provider or core package may depend on OpenTelemetry. Mapping to
+        # semantic conventions is the consumer's choice of version and policy;
+        # see the note in README.md.
+        no-otel:
+          files:
+            - "**/imds/**"
+            - "**/imdstest/**"
+            - "**/providers/**"
+          deny:
+            - pkg: go.opentelemetry.io
+              desc: >-
+                Providers return plain Go values. Semconv mapping belongs to the
+                consumer; examples/ shows how.
+
+    revive:
+      rules:
+        - name: exported
+          disabled: false
+
+  exclusions:
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      # The test kit deliberately builds misbehaving servers and clients.
+      - linters:
+          - gosec
+        path: internal/imdstest/
+
+      # G101 fires on the endpoint paths and header names of token exchanges --
+      # "/latest/api/token", "X-aws-ec2-metadata-token" -- none of which is a
+      # credential. Providers hold no secrets by construction: a token is
+      # obtained at runtime, used, and discarded, and the provider tests assert
+      # it never reaches an error string. Fake tokens in those tests trip the
+      # same rule.
+      - linters:
+          - gosec
+        path: providers/
+        text: "^G101:"

@@ -1,0 +1,61 @@
+name: PR
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  # release-please derives versions and changelog entries from commit subjects.
+  # Squash merges use the PR title as the subject, so the title is what has to
+  # be a valid conventional commit.
+  title:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            perf
+            deps
+            docs
+            refactor
+            test
+            ci
+            build
+            chore
+            revert
+
+  dco:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+      - name: Check Signed-off-by on every commit in the PR
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          missing=0
+          while read -r sha; do
+            author="$(git show -s --format='%an <%ae>' "$sha")"
+            if ! git show -s --format='%B' "$sha" | grep -qiF "Signed-off-by:"; then
+              echo "::error::commit $sha by $author has no Signed-off-by trailer"
+              missing=1
+            fi
+            # Some AI tools add Co-authored-by by default. Disclosure belongs in
+            # an Assisted-by trailer instead; see AGENTS.md.
+            if git show -s --format='%B' "$sha" | grep -qi '^Co-authored-by:.*\(claude\|chatgpt\|copilot\|gemini\|cursor\)'; then
+              echo "::error::commit $sha discloses AI assistance with Co-authored-by; use an Assisted-by trailer"
+              missing=1
+            fi
+          done < <(git rev-list "$BASE..$HEAD")
+          exit $missing

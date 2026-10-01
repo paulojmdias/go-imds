@@ -1,0 +1,7 @@
+# Build and test output
+*.test
+coverage.out
+coverage/
+govulncheck-output.json
+
+.DS_Store

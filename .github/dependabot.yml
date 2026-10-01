@@ -1,0 +1,27 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directories:
+      - "/"
+      - "/internal/tools"
+      - "/examples/otelresource"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: deps
+    groups:
+      # One PR per ecosystem rather than per module, since a shared dependency
+      # otherwise produces near-identical PRs that all have to be merged
+      # together anyway.
+      all:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns: ["*"]

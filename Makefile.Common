@@ -1,0 +1,109 @@
+# Ensure a failing command inside a pipe fails the recipe, rather than the
+# exit code of the last stage (usually tee) masking it.
+SHELL = /usr/bin/env bash
+.SHELLFLAGS = -o pipefail -c
+
+# SRC_ROOT is the top of the source tree.
+SRC_ROOT := $(shell git rev-parse --show-toplevel)
+
+GOCMD ?= go
+
+GOTEST_TIMEOUT ?= 300s
+GOTEST_OPT ?= -race -shuffle=on -timeout $(GOTEST_TIMEOUT)
+GOTEST_OPT_WITH_COVERAGE = $(GOTEST_OPT) -coverprofile=coverage.out -covermode=atomic
+GOTESTSUM_OPT ?= --format testname
+
+# Tools are pinned in $(TOOLS_MOD_DIR)/go.mod via tool directives, so their
+# versions are reproducible and Dependabot can bump them.
+TOOLS_MOD_DIR  := $(SRC_ROOT)/internal/tools
+TOOLS_MOD_FILE := $(TOOLS_MOD_DIR)/go.mod
+
+# GOWORK=off is required: -modfile cannot be used in workspace mode. It applies
+# to tool resolution only; builds and tests still see the workspace.
+#
+# GOOS=/GOARCH= build the tool for the host, while the tool itself then runs
+# against whatever GOOS/GOARCH make was invoked with -- that is what allows
+# linting Windows code from a Mac. On Windows `go tool -n` returns backslash
+# paths, which the shell strips, so they are rewritten to forward slashes.
+GO_TOOL = GOWORK=off GOOS= GOARCH= $(GOCMD) tool -modfile=$(TOOLS_MOD_FILE)
+
+LINT        = $(subst \,/,$(shell $(GO_TOOL) -n github.com/golangci/golangci-lint/v2/cmd/golangci-lint))
+ADDLICENSE  = $(subst \,/,$(shell $(GO_TOOL) -n github.com/google/addlicense))
+MISSPELL    = $(subst \,/,$(shell $(GO_TOOL) -n github.com/client9/misspell/cmd/misspell))
+GOVULNCHECK = $(subst \,/,$(shell $(GO_TOOL) -n golang.org/x/vuln/cmd/govulncheck))
+GOTESTSUM   = $(subst \,/,$(shell $(GO_TOOL) -n gotest.tools/gotestsum))
+
+LICENSE_HOLDER = The go-imds Authors
+ADDLICENSE_OPT = -s=only -l apache -c "$(LICENSE_HOLDER)" -y ""
+
+ALL_SRC     = $(shell find . -name '*.go' -type f | sort)
+ALL_SRC_DOC = $(shell find . \( -name '*.go' -o -name '*.md' \) -type f | sort)
+
+.DEFAULT_GOAL := common
+
+.PHONY: common
+common: lint test
+
+.PHONY: test
+test:
+	$(GOTESTSUM) $(GOTESTSUM_OPT) --packages="./..." -- $(GOTEST_OPT)
+
+.PHONY: test-with-cover
+test-with-cover:
+	$(GOTESTSUM) $(GOTESTSUM_OPT) --packages="./..." -- $(GOTEST_OPT_WITH_COVERAGE)
+
+.PHONY: bench
+bench:
+	$(GOCMD) test -bench=. -run=NONE -benchmem ./...
+
+.PHONY: fmt
+fmt:
+	$(LINT) fmt
+
+.PHONY: lint
+lint: checklicense misspell
+	$(LINT) run
+
+.PHONY: lint-fix
+lint-fix:
+	$(LINT) run --fix
+
+.PHONY: tidy
+tidy:
+	rm -f go.sum
+	$(GOCMD) mod tidy
+
+.PHONY: moddownload
+moddownload:
+	$(GOCMD) mod download
+
+.PHONY: govulncheck
+govulncheck:
+	$(GOVULNCHECK) ./...
+
+.PHONY: addlicense
+addlicense:
+	@$(ADDLICENSE) $(ADDLICENSE_OPT) $(ALL_SRC)
+
+# Checked with awk rather than `addlicense -check` alone so that the exact two
+# lines this repository uses are required, not merely some Apache header.
+.PHONY: checklicense
+checklicense:
+	@licRes=$$(for f in $(ALL_SRC); do \
+		awk 'NR<=2 && /Copyright $(LICENSE_HOLDER)/ { c=1 } NR<=2 && /SPDX-License-Identifier: Apache-2.0/ { s=1 } \
+		     END { if (!c || !s) print FILENAME }' $$f; \
+	done); \
+	if [ -n "$${licRes}" ]; then \
+		echo "license header missing or malformed in:"; echo "$${licRes}"; \
+		echo "run 'make addlicense' to fix"; \
+		exit 1; \
+	fi; \
+	echo "license headers OK"
+
+.PHONY: misspell
+misspell:
+	@$(MISSPELL) -error $(ALL_SRC_DOC)
+
+.PHONY: misspell-fix
+misspell-fix:
+	@$(MISSPELL) -w $(ALL_SRC_DOC)
